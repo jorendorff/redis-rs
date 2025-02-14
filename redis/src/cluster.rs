@@ -398,7 +398,7 @@ where
         for info in self.initial_nodes.iter() {
             let addr = info.addr.to_string();
 
-            if let Ok(mut conn) = self.connect(&addr) {
+            if let Ok(mut conn) = self.connect(&addr, true) {
                 if conn.check_connection() {
                     connections.insert(addr, conn);
                     break;
@@ -438,7 +438,7 @@ where
                     }
                 }
 
-                if let Ok(mut conn) = self.connect(addr) {
+                if let Ok(mut conn) = self.connect(addr, false) {
                     if conn.check_connection() {
                         return Some((addr.to_string(), conn));
                     }
@@ -459,7 +459,7 @@ where
             let value = conn.req_command(&slot_cmd())?;
             if let Ok(slots_data) = parse_slots(
                 value,
-                self.cluster_params.tls,
+                self.cluster_params.secondary_tls(),
                 addr.rsplit_once(':').unwrap().0,
             ) {
                 new_slots = Some(SlotMap::from_slots(
@@ -480,9 +480,9 @@ where
         }
     }
 
-    fn connect(&self, node: &str) -> RedisResult<C> {
+    fn connect(&self, node: &str, is_initial: bool) -> RedisResult<C> {
         let params = self.cluster_params.clone();
-        let info = get_connection_info(node, params)?;
+        let info = get_connection_info(node, params, is_initial)?;
 
         let mut conn = C::connect(info, Some(self.cluster_params.connection_timeout))?;
         if self.cluster_params.read_from_replicas {
@@ -503,7 +503,7 @@ where
         if let Some(addr) = slots.slot_addr_for_route(route) {
             (
                 addr.to_string(),
-                self.get_connection_by_addr(connections, addr),
+                self.get_connection_by_addr(connections, addr, false /*dubious*/),
             )
         } else {
             // try a random node next.  This is safe if slots are involved
@@ -516,13 +516,14 @@ where
         &self,
         connections: &'a mut HashMap<String, C>,
         addr: &str,
+        is_initial: bool,
     ) -> RedisResult<&'a mut C> {
         if connections.contains_key(addr) {
             Ok(connections.get_mut(addr).unwrap())
         } else {
             // Create new connection.
             // TODO: error handling
-            let conn = self.connect(addr)?;
+            let conn = self.connect(addr, is_initial)?;
             Ok(connections.entry(addr.to_string()).or_insert(conn))
         }
     }
@@ -630,7 +631,7 @@ where
                     ErrorKind::IoError,
                     "Couldn't find connection",
                 )))?;
-                let connection = self.get_connection_by_addr(connections, addr)?;
+                let connection = self.get_connection_by_addr(connections, addr, false)?;
                 let (_, indices) = routes.get(index).unwrap();
                 let cmd =
                     crate::cluster_routing::command_for_multi_slot_indices(&input, indices.iter());
@@ -772,7 +773,11 @@ where
                         Redirect::Moved(addr) => (addr, false),
                         Redirect::Ask(addr) => (addr, true),
                     };
-                    let mut conn = self.get_connection_by_addr(&mut connections, &addr);
+                    let mut conn = self.get_connection_by_addr(
+                        &mut connections,
+                        &addr,
+                        false, /* dubious */
+                    );
                     if is_asking {
                         // if we are in asking mode we want to feed a single
                         // ASKING command into the connection before what we
@@ -810,7 +815,7 @@ where
                     {
                         for node in &self.initial_nodes {
                             let addr = node.addr.to_string();
-                            if let Ok(mut conn) = self.connect(&addr) {
+                            if let Ok(mut conn) = self.connect(&addr, true) {
                                 if conn.check_connection() {
                                     self.connections.borrow_mut().insert(addr, conn);
                                 }
@@ -850,7 +855,7 @@ where
                             if *self.auto_reconnect.borrow() {
                                 // if the connection is no longer valid, we should remove it.
                                 self.connections.borrow_mut().remove(&addr);
-                                if let Ok(mut conn) = self.connect(&addr) {
+                                if let Ok(mut conn) = self.connect(&addr, false /*dubious*/) {
                                     if conn.check_connection() {
                                         self.connections.borrow_mut().insert(addr, conn);
                                     }
@@ -864,7 +869,7 @@ where
                         crate::types::RetryMethod::ReconnectFromInitialConnections => {
                             // TODO - implement reconnect from initial connections
                             if *self.auto_reconnect.borrow() {
-                                if let Ok(mut conn) = self.connect(&addr) {
+                                if let Ok(mut conn) = self.connect(&addr, false /*dubious*/) {
                                     if conn.check_connection() {
                                         self.connections.borrow_mut().insert(addr, conn);
                                     }
@@ -911,7 +916,7 @@ where
 
         let node_cmds = self.map_cmds_to_nodes(cmds)?;
         for nc in &node_cmds {
-            self.get_connection_by_addr(&mut connections, &nc.addr)?
+            self.get_connection_by_addr(&mut connections, &nc.addr, false /*dubious*/)?
                 .send_packed_command(&nc.pipe)?;
         }
         Ok(node_cmds)
@@ -1080,11 +1085,17 @@ fn get_random_connection_or_error<C: ConnectionLike + Connect + Sized>(
 pub(crate) fn get_connection_info(
     node: &str,
     cluster_params: ClusterParams,
+    is_initial: bool,
 ) -> RedisResult<ConnectionInfo> {
     let (host, port) = split_node_address(node)?;
 
     Ok(ConnectionInfo {
-        addr: get_connection_addr(host, port, cluster_params.tls, cluster_params.tls_params),
+        addr: get_connection_addr(
+            host,
+            port,
+            cluster_params.tls(is_initial),
+            cluster_params.tls_params,
+        ),
         redis: RedisConnectionInfo {
             password: cluster_params.password,
             username: cluster_params.username,

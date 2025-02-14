@@ -585,7 +585,7 @@ where
             };
             match parse_slots(
                 value,
-                inner.cluster_params.tls,
+                inner.cluster_params.secondary_tls(),
                 addr.rsplit_once(':').unwrap().0,
             )
             .and_then(|v: Vec<Slot>| Self::build_slot_map(slots, v))
@@ -1342,7 +1342,7 @@ where
     }
 }
 
-async fn connect_and_check<C>(node: &str, params: ClusterParams) -> RedisResult<C>
+async fn connect_and_check<C>(node: &str, params: ClusterParams, is_initial: bool) -> RedisResult<C>
 where
     C: ConnectionLike + Connect + Send + 'static,
 {
@@ -1350,7 +1350,7 @@ where
     let connection_timeout = params.connection_timeout;
     let response_timeout = params.response_timeout;
     let push_sender = params.async_push_sender.clone();
-    let info = get_connection_info(node, params)?;
+    let info = get_connection_info(node, params, is_initial)?;
     let mut config = AsyncConnectionConfig::default()
         .set_connection_timeout(connection_timeout)
         .set_response_timeout(response_timeout);

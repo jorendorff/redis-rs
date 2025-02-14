@@ -29,6 +29,7 @@ struct BuilderParams {
     username: Option<String>,
     read_from_replicas: bool,
     tls: Option<TlsMode>,
+    secondary_tls: Option<TlsMode>,
     #[cfg(feature = "tls-rustls")]
     certs: Option<TlsCertificates>,
     retries_configuration: RetryParams,
@@ -86,6 +87,10 @@ pub(crate) struct ClusterParams {
     /// When Some(TlsMode), connections use tls and verify certification depends on TlsMode.
     /// When None, connections do not use tls.
     pub(crate) tls: Option<TlsMode>,
+    /// Indicates the TLS behavior of "secondary" connections (non-initial connections).
+    /// When Some(TlsMode), secondary connections use tls and verify certification depends on TlsMode.
+    /// When None, secondary connections use the `tls` param (they behave the same as initial connections).
+    pub(crate) secondary_tls: Option<TlsMode>,
     pub(crate) retry_params: RetryParams,
     pub(crate) tls_params: Option<TlsConnParams>,
     pub(crate) connection_timeout: Duration,
@@ -112,6 +117,7 @@ impl ClusterParams {
             username: value.username,
             read_from_replicas: value.read_from_replicas,
             tls: value.tls,
+            secondary_tls: value.secondary_tls,
             retry_params: value.retries_configuration,
             tls_params,
             connection_timeout: value.connection_timeout.unwrap_or(Duration::from_secs(1)),
@@ -134,6 +140,18 @@ impl ClusterParams {
             self.async_push_sender = Some(async_push_sender);
         }
         self
+    }
+
+    pub(crate) fn tls(&self, is_initial: bool) -> Option<TlsMode> {
+        if is_initial {
+            self.tls
+        } else {
+            self.secondary_tls()
+        }
+    }
+
+    pub(crate) fn secondary_tls(&self) -> Option<TlsMode> {
+        self.secondary_tls.or(self.tls)
     }
 }
 
@@ -299,6 +317,13 @@ impl ClusterClientBuilder {
     #[cfg(any(feature = "tls-native-tls", feature = "tls-rustls"))]
     pub fn tls(mut self, tls: TlsMode) -> ClusterClientBuilder {
         self.builder_params.tls = Some(tls);
+        self
+    }
+
+    /// Sets TLS mode for secondary connections, i.e. non-initial connections.
+    #[cfg(any(feature = "tls-native-tls", feature = "tls-rustls"))]
+    pub fn secondary_tls(mut self, secondary_tls: TlsMode) -> ClusterClientBuilder {
+        self.builder_params.secondary_tls = Some(secondary_tls);
         self
     }
 
