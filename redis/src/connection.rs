@@ -995,37 +995,17 @@ pub(crate) fn create_rustls_config(
             config_builder.with_no_client_auth()
         };
 
-        // Implement `danger_accept_invalid_hostnames`.
-        //
-        // The strange cfg here is to handle a specific unusual combination of features: if
-        // `tls-native-tls` and `tls-rustls` are enabled, but `tls-rustls-insecure` is not, and the
-        // application tries to use the danger flag.
-        #[cfg(any(feature = "tls-rustls-insecure", feature = "tls-native-tls"))]
+        #[cfg(feature = "tls-rustls-insecure")]
         let config_builder = if !insecure && tls_params.danger_accept_invalid_hostnames {
-            #[cfg(not(feature = "tls-rustls-insecure"))]
-            {
-                // This code should not enable an insecure mode if the `insecure` feature is not
-                // set, but it shouldn't silently ignore the flag either. So return an error.
-                fail!((
-                    ErrorKind::InvalidClientConfig,
-                    "Cannot create insecure client via danger_accept_invalid_hostnames without tls-rustls-insecure feature"
-                ));
-            }
-
-            #[cfg(feature = "tls-rustls-insecure")]
-            {
-                let mut config = config_builder;
-                config.dangerous().set_certificate_verifier(Arc::new(
-                    AcceptInvalidHostnamesCertVerifier {
-                        inner: rustls::client::WebPkiServerVerifier::builder(Arc::new(
-                            root_cert_store,
-                        ))
+            let mut config = config_builder;
+            config.dangerous().set_certificate_verifier(Arc::new(
+                AcceptInvalidHostnamesCertVerifier {
+                    inner: rustls::client::WebPkiServerVerifier::builder(Arc::new(root_cert_store))
                         .build()
                         .map_err(|err| rustls::Error::from(rustls::OtherError(Arc::new(err))))?,
-                    },
-                ));
-                config
-            }
+                },
+            ));
+            config
         } else {
             config_builder
         };
